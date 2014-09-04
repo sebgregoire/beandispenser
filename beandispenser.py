@@ -25,11 +25,19 @@ class FailedJob(Exception):
 
 class Worker(object):
 
+    _on_fail = 'bury'
+    _on_timeout = 'release'
+
     def __init__(self, tube, pid):
 
         self._beanstalk = beanstalkc.Connection(host=beanstalkd_host, port=beanstalkd_port)
         self._tube = tube
         self._pid = pid
+
+        if 'on_fail' in tube and tube['on_fail'] in ['bury', 'release']:
+            self._on_fail = tube['on_fail']
+        if 'on_timeout' in tube and tube['on_timeout'] in ['bury', 'release']:
+            self._on_timeout = tube['on_timeout']
 
     def watch(self):
 
@@ -47,18 +55,23 @@ class Worker(object):
                     job.delete()
                 
                 except FailedJob as e:
-                    print "failed job in pid %d" % self._pid
-
-                    job.bury()
+                    self._bury_or_release(job, self._on_fail)
 
                 except TimeOut:
-                    print "timeout in pid %d" % self._pid
-                    job.bury()
+                    self._bury_or_release(job, self._on_timeout)
 
         except KeyboardInterrupt:
             sys.exit()
 
-             
+    def _bury_or_release(self, job, action):
+        if action == 'release':
+            print "release with delay"
+            job.release(job.stats()['pri'], 60)
+        else:
+            print "bury"
+            job.bury()
+
+
 class Command(object):
  
     def __init__(self, command, timeout, input):
@@ -171,15 +184,18 @@ if __name__ == "__main__":
             "name" : "foo",
             "workers" : 3,
             "ttr" : 1,
-            "command" : "sleep"
+            "command" : "sleep 3",
+            "on_timeout" : "bury",
+            "on_fail" : "bury"
+
         },
         {
             "name" : "bar",
             "workers" : 4,
             "ttr" : 1,
-            "command" : "sleep",
-            "bury_on_timeout" : True,
-            "bury_on_fail" : True
+            "command" : "sleep 3",
+            "on_timeout" : "bury",
+            "on_fail" : "bury"
         }
     ]
 
