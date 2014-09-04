@@ -1,14 +1,27 @@
 """
 Heavily inspired by http://jacobian.org/writing/python-is-unix/
 """
- 
+import threading
+import traceback
 import os
 import sys
 import beanstalkc
 import time
+import subprocess
+import shlex
 
 beanstalkd_host = "localhost"
 beanstalkd_port = 11300
+
+class TimeOut(Exception):
+    pass
+
+class FailedJob(Exception):
+
+    def __init__(self, message, returncode):
+        Exception.__init__(self, message)
+        self.returncode = returncode
+
 
 class Worker(object):
 
@@ -21,15 +34,74 @@ class Worker(object):
     def watch(self):
 
         try:
-            self._beanstalk.watch(self._tube)
+            self._beanstalk.watch(self._tube["name"])
             self._beanstalk.ignore('default')
 
             while True:
                 job = self._beanstalk.reserve()
-                job.delete()
+
+                try:
+                    command = Command(self._tube["command"], self._tube["ttr"], job.body)
+                    command.run()
+
+                    job.delete()
+                
+                except FailedJob as e:
+                    print "failed job in pid %d" % self._pid
+
+                    job.bury()
+
+                except TimeOut:
+                    print "timeout in pid %d" % self._pid
+                    job.bury()
 
         except KeyboardInterrupt:
             sys.exit()
+
+             
+class Command(object):
+ 
+    def __init__(self, command, timeout, input):
+        self.command = shlex.split(command)
+        self.timeout = timeout
+        self.input = input
+ 
+    def target(self):
+        try:
+            self.process = subprocess.Popen(self.command,
+                                    stdin  = subprocess.PIPE,
+                                    stdout = subprocess.PIPE,
+                                    stderr = subprocess.PIPE)
+            self.process.stdin.write(self.input)
+            self.output, self.error = self.process.communicate()
+            self.returncode = self.process.returncode
+
+        except:
+            self.error = traceback.format_exc()
+            self.returncode = -1
+
+    def run(self):
+
+        # thread
+        thread = threading.Thread(target=self.target)
+        thread.start()
+
+        # join the new thread (blocking). This unblocks after <timeout>
+        thread.join(self.timeout)
+
+        # if the thread is still alive after <timeout>, it means the join
+        # timed out. Terminate the process and exit.
+        if thread.is_alive():
+            self.process.terminate()
+            # renew the join so we wait till the terminated process exits
+            thread.join()
+
+            raise TimeOut
+
+        if self.returncode != 0:
+            raise FailedJob(self.error, self.returncode)
+
+        return self.output
 
 
 class WorkerPool(object):
@@ -66,7 +138,7 @@ class Forker(object):
 
     def fork_for_tube(self, tube):
 
-        pool = WorkerPool(tube["name"])
+        pool = WorkerPool(tube)
         self._pools.append(pool)
 
         # Fork you some child processes. In the parent, the call to
@@ -97,13 +169,18 @@ if __name__ == "__main__":
     tubes = [
         {
             "name" : "foo",
-            "workers" : 3
+            "workers" : 3,
+            "ttr" : 1,
+            "command" : "sleep"
         },
-
         {
             "name" : "bar",
-            "workers" : 4
-        },
+            "workers" : 4,
+            "ttr" : 1,
+            "command" : "sleep",
+            "bury_on_timeout" : True,
+            "bury_on_fail" : True
+        }
     ]
 
 
