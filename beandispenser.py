@@ -6,10 +6,11 @@ import beanstalkc
 import time
 import subprocess
 import shlex
+import signal
+from ConfigParser import ConfigParser
 
-#todo: move this to configs
-beanstalkd_host = "localhost"
-beanstalkd_port = 11300
+config = ConfigParser()
+config.read('beandispenser.conf')
 
 class TimeOut(Exception):
     """An exception for a job that times out before the TTR
@@ -39,62 +40,63 @@ class Worker(object):
     _state = None
     _exit_on_next_job = False
 
-    def __init__(self, tube, pid):
+    def __init__(self, pool, pid):
         """Constructor.
 
         :param tube: an dict containing information on the tube to watch
         :param pid:  the PID of the worker fork
         """
 
-        print "Worker %d is now watching tube %s" % (pid, tube['name'])
+        print "Worker %d is now watching tube %s" % (pid, pool['tube'])
 
-        self._beanstalk = beanstalkc.Connection(host=beanstalkd_host,
-                                                port=beanstalkd_port)
-        self._tube = tube
+        self._beanstalk = beanstalkc.Connection(
+            host=config.get('connection', 'host'),
+            port=int(config.get('connection', 'port')))
+
+        self._pool = pool
         self._pid = pid
 
-        if 'on_fail' in tube and tube['on_fail'] in ['bury', 'release']:
-            self._on_fail = tube['on_fail']
-        if 'on_timeout' in tube and tube['on_timeout'] in ['bury', 'release']:
-            self._on_timeout = tube['on_timeout']
+        if 'on_fail' in pool and pool['on_fail'] in ['bury', 'release']:
+            self._on_fail = pool['on_fail']
+        if 'on_timeout' in pool and pool['on_timeout'] in ['bury', 'release']:
+            self._on_timeout = pool['on_timeout']
+
+        signal.signal(signal.SIGINT, self.stop)
 
     def watch(self):
         """Start watching a tube for incoming jobs"""
 
-        try:
-            self._beanstalk.watch(self._tube["name"])
-            self._beanstalk.ignore('default')
+        self._beanstalk.watch(self._pool["tube"])
+        self._beanstalk.ignore('default')
 
-            while True:
-                # graceful stop
-                if self._exit_on_next_job == True:
-                    sys.exit()
+        while True:
+            # graceful stop
+            if self._exit_on_next_job == True:
+                sys.exit()
 
-                job = self._reserve_job()
-                print "job %d accepted by worker %d" % (job.stats()['id'], self._pid)
+            job = self._reserve_job()
+            print "job %d accepted by worker %d" % (job.stats()['id'], self._pid)
 
-                try:
-                    time_left = job.stats()["time-left"]
+            try:
+                time_left = job.stats()["time-left"]
 
-                    if time_left > 0:
-                        command = Command(self._tube["command"], time_left, job.body)
-                        command.run()
+                if time_left > 0:
+                    command = Command(self._pool["command"], time_left, job.body)
+                    command.run()
 
-                        print "job %d done" % job.stats()['id']
+                    print "job %d done" % job.stats()['id']
 
-                        job.delete()
-                    else:
-                        self._bury_or_release(job, self._on_timeout)
-                
-                except FailedJob as e:
-                    self._bury_or_release(job, self._on_fail)
-
-                except TimeOut:
+                    job.delete()
+                else:
                     self._bury_or_release(job, self._on_timeout)
+            
+            except FailedJob as e:
+                print e
+                self._bury_or_release(job, self._on_fail)
 
-        except KeyboardInterrupt:
-            print "graceful"
-            self._graceful_stop()
+            except TimeOut:
+                self._bury_or_release(job, self._on_timeout)
+
 
     def _reserve_job(self):
         """Reserve a job from the tube and set appropriate worker state"""
@@ -116,7 +118,7 @@ class Worker(object):
             print "Worker %d buries a job" % self._pid
             job.bury()
 
-    def _graceful_stop(self):
+    def stop(self, signum, frame):
         """Perform a graceful stop"""
         if self._state == self.STATE_WAITING:
             print "Worker %d exiting immediately" % self._pid
@@ -146,6 +148,11 @@ class Command(object):
         self.timeout = timeout
         self.input = input
  
+    def preexec_function(self):
+        # Ignore the SIGINT signal by setting the handler to the standard
+        # signal handler SIG_IGN.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     def target(self):
         """The target of the command thread. IE the actual execution of
         the command.
@@ -154,7 +161,8 @@ class Command(object):
             self.process = subprocess.Popen(self.command,
                                     stdin  = subprocess.PIPE,
                                     stdout = subprocess.PIPE,
-                                    stderr = subprocess.PIPE)
+                                    stderr = subprocess.PIPE,
+                                    preexec_fn = self.preexec_function)
             self.process.stdin.write(self.input)
             self.output, self.error = self.process.communicate()
             self.returncode = self.process.returncode
@@ -188,106 +196,68 @@ class Command(object):
 
         return self.output
 
-
-class WorkerPool(object):
-    """A pool of workers all listening to the same tube
-    """
-    _workers = []
-
-    def __init__(self, tube):
-        """Constructor
-
-        param tube: information abou the tube that workers in this pool will watch
-        """
-        self._tube = tube
-
-    def add_new_worker(self, pid):
-        """Add a new worker to the pool. Each worker runs in its own fork.
-
-        param pid: the PID of the worker fork
-        """
-        self._workers.append(Worker(self._tube, pid))
-
-    def watch(self):
-
-        """Tell all workers in the pool to start watching their assigned tube
-        """
-        for worker in self._workers:
-            worker.watch()
-
-
 class Forker(object):
     """The forker takes care of creating a fork for each worker.
     """
-    _worker_pools = []
 
-    def __init__(self, tubes):
+    def __init__(self, pools):
         """Constructor
 
         param tubes: a list of tube configs, one per worker pool
         """
-        self._tubes = tubes
+        self._pools = pools
 
 
     def fork_all(self):
         """Create a fork for each worker. The number of workers per tube is
         specified in the tubes list passed to the constructor.
         """
-        for tube in self._tubes:
 
-            pool = WorkerPool(tube)
-            self._worker_pools.append(pool)
+        for pool in self._pools:
 
-            for i in range(tube["workers"]):
+            for i in range(int(pool["workers"])):
 
                 # fork the current process. The parent and the child both continue
                 # from this point so we need to make sure that only the child
                 # process adds workers to the pool.
                 pid = os.fork()
                 
-                # If pid == 0 then we're in the child process.
                 if pid == 0:
+                    # child process
+                    worker = Worker(pool, os.getpid())
+                    worker.watch()
 
-                    fork_pid = os.getpid()
-
-                    pool.add_new_worker(fork_pid)
-                    pool.watch()
-
-                    # once pool.watch() unblocks it means the worker in this fork
-                    # has stopped watching (hopefully because of a graceful stop)
-                    # so we need to exit the fork.
                     sys.exit()
 
 
 if __name__ == "__main__":
 
-    tubes = [
-        {
-            "name" : "foofoo",
-            "workers" : 3,
-            "command" : "sleep 20",
-            "on_timeout" : "bury",
-            "on_fail" : "bury"
+    pools = []
 
-        },
-        {
-            "name" : "barbar",
-            "workers" : 4,
-            "command" : "sleep 60",
-            "on_timeout" : "bury",
-            "on_fail" : "bury"
-        }
-    ]
+    for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'pool:']:
 
+        pool = dict([(key, config.get(section, key)) for key in [
+            'workers',
+            'command',
+            'on_timeout',
+            'on_fail'
+        ] if config.has_option(section, key)])
 
-try:
-    forker = Forker(tubes)
-    forker.fork_all()
+        pool.update({"tube" : tube})
 
-    os.waitpid(-1, 0)
-except KeyboardInterrupt:
-    os.waitpid(-1, 0)
+        pools.append(pool)
 
-    print "\nbye"
-    sys.exit()
+    try:
+        forker = Forker(pools)
+        forker.fork_all()
+
+        os.waitpid(-1, 0)
+    except KeyboardInterrupt:
+
+        print "KeyboardInterrupt"
+        os.waitpid(-1, 0)
+
+        time.sleep(1)
+        print "\nbye"
+        sys.exit()
 
