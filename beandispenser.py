@@ -61,7 +61,9 @@ class Worker(object):
         if 'on_timeout' in pool and pool['on_timeout'] in ['bury', 'release']:
             self._on_timeout = pool['on_timeout']
 
-        signal.signal(signal.SIGINT, self.stop)
+        # When the process is asked politely to stop, stop gracefullu
+        for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
+            signal.signal(signum, self.stop)
 
     def watch(self):
         """Start watching a tube for incoming jobs"""
@@ -150,9 +152,9 @@ class Command(object):
         self.input = input
  
     def preexec_function(self):
-        # Ignore the SIGINT signal by setting the handler to the standard
-        # signal handler SIG_IGN.
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # Ignore the SIGINT, SIGTERM and SIGQUIT. Let the worker do the quiting.
+        for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
+            signal.signal(signum, signal.SIG_IGN)
 
     def target(self):
         """The target of the command thread. IE the actual execution of
@@ -216,7 +218,9 @@ class Forker(object):
 
         param tubes: a list of tube configs, one per worker pool
         """
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        # Ignore the SIGINT, SIGTERM and SIGQUIT. Let the workers do the quiting.
+        for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
+            signal.signal(signum, signal.SIG_IGN)
 
         for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'pool:']:
 
@@ -264,6 +268,6 @@ if __name__ == "__main__":
     Forker().fork_all()
 
     time.sleep(1)
-    
+
     # good manners
     print "\nbye"
