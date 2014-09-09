@@ -72,6 +72,7 @@ class Worker(object):
         while True:
             # graceful stop
             if self._exit_on_next_job == True:
+                print "Worker %d exits" % self._pid
                 sys.exit()
 
             job = self._reserve_job()
@@ -200,13 +201,28 @@ class Forker(object):
     """The forker takes care of creating a fork for each worker.
     """
 
-    def __init__(self, pools):
+    _pids = []
+    _pools = []
+
+    def __init__(self):
         """Constructor
 
         param tubes: a list of tube configs, one per worker pool
         """
-        self._pools = pools
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+        for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'pool:']:
+
+            pool = dict([(key, config.get(section, key)) for key in [
+                'workers',
+                'command',
+                'on_timeout',
+                'on_fail'
+            ] if config.has_option(section, key)])
+
+            pool.update({"tube" : tube})
+
+            self._pools.append(pool)
 
     def fork_all(self):
         """Create a fork for each worker. The number of workers per tube is
@@ -228,36 +244,17 @@ class Forker(object):
                     worker.watch()
 
                     sys.exit()
+                else:
+                    self._pids.append(pid)
+
+        for pid in self._pids:
+            os.waitpid(pid, 0)
+
 
 
 if __name__ == "__main__":
 
-    pools = []
+    Forker().fork_all()
 
-    for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'pool:']:
-
-        pool = dict([(key, config.get(section, key)) for key in [
-            'workers',
-            'command',
-            'on_timeout',
-            'on_fail'
-        ] if config.has_option(section, key)])
-
-        pool.update({"tube" : tube})
-
-        pools.append(pool)
-
-    try:
-        forker = Forker(pools)
-        forker.fork_all()
-
-        os.waitpid(-1, 0)
-    except KeyboardInterrupt:
-
-        print "KeyboardInterrupt"
-        os.waitpid(-1, 0)
-
-        time.sleep(1)
-        print "\nbye"
-        sys.exit()
-
+    # good manners
+    print "\nbye"
