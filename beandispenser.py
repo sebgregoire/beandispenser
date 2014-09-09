@@ -186,9 +186,16 @@ class Command(object):
         # the thread is done.
         thread.join(self.timeout)
 
+        # if the thread is still alive, it means it's taking longer than ttr
         if thread.is_alive():
+
+            # give the process 2 seconds to finish properly
             self.process.terminate()
-            thread.join()
+            thread.join(2)
+
+            # if it hasn't exited after 2 seconds, kill it.
+            if thread.is_alive():
+                self.process.kill()
 
             raise TimeOut
 
@@ -256,5 +263,7 @@ if __name__ == "__main__":
 
     Forker().fork_all()
 
+    time.sleep(1)
+    
     # good manners
     print "\nbye"
