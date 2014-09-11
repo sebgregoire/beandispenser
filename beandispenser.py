@@ -8,6 +8,7 @@ import subprocess
 import shlex
 import signal
 from ConfigParser import ConfigParser
+import syslog
 
 config = ConfigParser()
 config.read('beandispenser.conf')
@@ -26,7 +27,18 @@ class FailedJob(Exception):
         self.returncode = returncode
 
 
-class Worker(object):
+class Logger(object):
+
+    def __init__(self, name):
+        self._name = name
+
+    def info(self, msg, *args):
+        syslog.openlog(self._name, syslog.LOG_PID, syslog.LOG_USER)
+        syslog.syslog(msg.format(*args))
+        syslog.closelog()
+
+
+class Worker(Logger, object):
     """A worker connects to the beanstalkc server and waits for jobs to
     become available.
     """
@@ -47,7 +59,9 @@ class Worker(object):
         :param pid:  the PID of the worker fork
         """
 
-        print "Worker %d is now watching tube %s" % (pid, pool['tube'])
+        super(Worker, self).__init__(pool['tube'])
+
+        self.info("Start watching tube {0}", pool['tube'])
 
         self._beanstalk = beanstalkc.Connection(
             host=config.get('connection', 'host'),
@@ -61,7 +75,7 @@ class Worker(object):
         if 'on_timeout' in pool and pool['on_timeout'] in ['bury', 'release']:
             self._on_timeout = pool['on_timeout']
 
-        # When the process is asked politely to stop, stop gracefullu
+        # When the process is asked politely to stop, stop gracefully
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, self.stop)
 
@@ -74,11 +88,15 @@ class Worker(object):
         while True:
             # graceful stop
             if self._exit_on_next_job == True:
-                print "Worker %d exits" % self._pid
-                sys.exit()
+                self.info("Graceful stop")
+                self.close()
 
             job = self._reserve_job()
-            print "job %d accepted by worker %d" % (job.stats()['id'], self._pid)
+
+            if not job:
+                continue
+
+            self.info("job {0} accepted", job.stats()['id'])
 
             try:
                 time_left = job.stats()["time-left"]
@@ -87,24 +105,25 @@ class Worker(object):
                     command = Command(self._pool["command"], time_left, job.body)
                     command.run()
 
-                    print "job %d done" % job.stats()['id']
+                    self.info("job {0} done", job.stats()['id'])
 
                     job.delete()
                 else:
                     self._bury_or_release(job, self._on_timeout)
             
             except FailedJob as e:
-                print e
+                # todo : log exit code and output
+                self.info("job {0} failed", job.stats()['id'])
                 self._bury_or_release(job, self._on_fail)
 
             except TimeOut:
+                self.info("job {0} timed out", job.stats()['id'])
                 self._bury_or_release(job, self._on_timeout)
-
 
     def _reserve_job(self):
         """Reserve a job from the tube and set appropriate worker state"""
         self._state = self.STATE_WAITING
-        self._current_job = self._beanstalk.reserve()
+        self._current_job = self._beanstalk.reserve(2)
         self._state = self.STATE_EXECUTING        
         return self._current_job
 
@@ -115,21 +134,19 @@ class Worker(object):
         param action: the action to perform on the job
         """
         if action == 'release':
-            print "Worker %d releases a job" % self._pid
             job.release(job.stats()['pri'], 60)
         else:
-            print "Worker %d buries a job" % self._pid
             job.bury()
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
-        if self._state == self.STATE_WAITING:
-            print "Worker %d exiting immediately" % self._pid
-            sys.exit()
-        else:
-            print "Worker %d finishing job %d before exiting" % (self._pid, self._current_job.stats()['id'])
-            self._exit_on_next_job = True
+        if self._state == self.STATE_EXECUTING:
+            self.info("Finishing job {0} before exiting", self._current_job.stats()['id'])
+        self._exit_on_next_job = True
 
+    def close(self):
+        self._beanstalk.close()
+        sys.exit()
 
 class Command(object):
     """When a worker reserves a job, it executes a command and passes
@@ -193,7 +210,6 @@ class Command(object):
 
             # give the process 2 seconds to finish properly
             self.process.terminate()
-            thread.join(2)
 
             # if it hasn't exited after 2 seconds, kill it.
             if thread.is_alive():
@@ -206,7 +222,7 @@ class Command(object):
 
         return self.output
 
-class Forker(object):
+class Forker(Logger, object):
     """The forker takes care of creating a fork for each worker.
     """
 
@@ -218,6 +234,9 @@ class Forker(object):
 
         param tubes: a list of tube configs, one per worker pool
         """
+
+        super(Forker, self).__init__("main")
+
         # Ignore the SIGINT, SIGTERM and SIGQUIT. Let the workers do the quiting.
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, signal.SIG_IGN)
@@ -239,6 +258,8 @@ class Forker(object):
         """Create a fork for each worker. The number of workers per tube is
         specified in the tubes list passed to the constructor.
         """
+
+        self.info("Start forking")
 
         for pool in self._pools:
 
@@ -266,8 +287,6 @@ class Forker(object):
 if __name__ == "__main__":
 
     Forker().fork_all()
-
-    time.sleep(1)
 
     # good manners
     print "\nbye"
