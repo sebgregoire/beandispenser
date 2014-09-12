@@ -111,8 +111,8 @@ class Worker(Logger, object):
                     self._bury_or_release(job, self._on_timeout)
             
             except FailedJob as e:
-                # todo : log exit code and output
-                self.info("job {0} failed", job.stats()['id'])
+                self.info("job {0} failed with return code {1} and message '{2}'",
+                                    job.stats()['id'], e.returncode, e.message)
                 self._bury_or_release(job, self._on_fail)
 
             except TimeOut:
@@ -120,7 +120,8 @@ class Worker(Logger, object):
                 self._bury_or_release(job, self._on_timeout)
 
     def _reserve_job(self):
-        """Reserve a job from the tube and set appropriate worker state"""
+        """Reserve a job from the tube and set appropriate worker state.
+        Only block the socket for 2 seconds so we can catch graceful stops  """
         self._state = self.STATE_WAITING
         self._current_job = self._beanstalk.reserve(2)
         self._state = self.STATE_EXECUTING        
@@ -250,7 +251,6 @@ class Forker(Logger, object):
             ] if config.has_option(section, key)])
 
             pool.update({"tube" : tube})
-            print pool
             self._pools.append(pool)
 
     def fork_all(self):
