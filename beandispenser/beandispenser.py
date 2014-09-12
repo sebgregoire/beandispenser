@@ -241,7 +241,7 @@ class Forker(Logger, object):
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, signal.SIG_IGN)
 
-        for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'pool:']:
+        for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'tube:']:
 
             pool = dict([(key, config.get(section, key)) for key in [
                 'workers',

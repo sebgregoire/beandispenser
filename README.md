@@ -21,11 +21,11 @@ An example:
 host=localhost
 port=11300
 
-[pool:foo]
+[tube:foo]
 workers=3
 command=/path/to/command
 
-[pool:bar]
+[tube:bar]
 workers=5
 command=/path/to/command
 ```
