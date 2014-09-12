@@ -1,0 +1,15 @@
+[connection]
+host=localhost
+port=11300
+
+;[pool:foo]
+;workers=2
+;command=/path/to/your/command
+;on_timeout=release
+;on_fail=bury
+
+;[pool:bar]
+;workers=5
+;command=/path/to/your/other/command
+;on_timeout=bury
+;on_fail=release

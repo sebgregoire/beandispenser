@@ -11,7 +11,7 @@ from ConfigParser import ConfigParser
 import syslog
 
 config = ConfigParser()
-config.read('beandispenser.conf')
+config.read(os.environ['BEANDISPENDER_CONFIG_FILE'])
 
 class TimeOut(Exception):
     """An exception for a job that times out before the TTR
@@ -92,7 +92,6 @@ class Worker(Logger, object):
                 self.close()
 
             job = self._reserve_job()
-
             if not job:
                 continue
 
@@ -251,7 +250,7 @@ class Forker(Logger, object):
             ] if config.has_option(section, key)])
 
             pool.update({"tube" : tube})
-
+            print pool
             self._pools.append(pool)
 
     def fork_all(self):
@@ -282,11 +281,11 @@ class Forker(Logger, object):
         for pid in self._pids:
             os.waitpid(pid, 0)
 
-
-
-if __name__ == "__main__":
-
+def main():
     Forker().fork_all()
 
     # good manners
     print "\nbye"
+
+if __name__ == "__main__":
+    main()
