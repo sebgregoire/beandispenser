@@ -37,6 +37,11 @@ class Logger(object):
         syslog.syslog(msg.format(*args))
         syslog.closelog()
 
+    def error(self, msg, *args):
+        syslog.openlog(self._name, syslog.LOG_PID, syslog.LOG_USER)
+        syslog.syslog('Error : ' + msg.format(*args))
+        syslog.closelog()
+
 
 class Worker(Logger, object):
     """A worker connects to the beanstalkc server and waits for jobs to
@@ -61,11 +66,8 @@ class Worker(Logger, object):
 
         super(Worker, self).__init__(pool['tube'])
 
+        self.connect()
         self.info("Start watching tube {0}", pool['tube'])
-
-        self._beanstalk = beanstalkc.Connection(
-            host=config.get('connection', 'host'),
-            port=int(config.get('connection', 'port')))
 
         self._pool = pool
         self._pid = pid
@@ -78,6 +80,17 @@ class Worker(Logger, object):
         # When the process is asked politely to stop, stop gracefully
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, self.stop)
+
+    def connect(self):
+
+        try:
+            self._beanstalk = beanstalkc.Connection(
+                host=config.get('connection', 'host'),
+                port=int(config.get('connection', 'port')))
+        except beanstalkc.SocketError:
+            self.error("Failed to connect. Retrying in 5 seconds")
+            time.sleep(5)
+            self.connect()
 
     def watch(self):
         """Start watching a tube for incoming jobs"""
@@ -122,10 +135,14 @@ class Worker(Logger, object):
     def _reserve_job(self):
         """Reserve a job from the tube and set appropriate worker state.
         Only block the socket for 2 seconds so we can catch graceful stops  """
-        self._state = self.STATE_WAITING
-        self._current_job = self._beanstalk.reserve(2)
-        self._state = self.STATE_EXECUTING        
-        return self._current_job
+        try:
+            self._state = self.STATE_WAITING
+            self._current_job = self._beanstalk.reserve(2)
+            self._state = self.STATE_EXECUTING        
+            return self._current_job
+        except beanstalkc.SocketError:
+            self.connect()
+            return self._reserve_job()
 
     def _bury_or_release(self, job, action):
         """Bury or release a job
