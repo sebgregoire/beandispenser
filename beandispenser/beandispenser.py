@@ -7,11 +7,18 @@ import time
 import subprocess
 import shlex
 import signal
-from ConfigParser import ConfigParser
+from ConfigParser import ConfigParser, NoOptionError
 import syslog
 
-config = ConfigParser()
-config.read(os.environ['BEANDISPENDER_CONFIG_FILE'])
+class Config(ConfigParser):
+    """Just a simple way of getting None back if the config doesn't exist
+    """
+    def get(self, section, key, default=None):
+        try:
+            return ConfigParser.get(self, section, key)
+        except NoOptionError:
+            return None
+
 
 class TimeOut(Exception):
     """An exception for a job that times out before the TTR
@@ -51,42 +58,67 @@ class Worker(Logger, object):
     STATE_WAITING = 1
     STATE_EXECUTING = 2
 
+    # exit codes from commands are interpreted and used to decide what to do with
+    # commands when they succeed or fail. Example: a successfully completed job
+    # needs to be deleted. A command that failed permanently (example: a job that
+    # needed to work on a resource that no longer exists) needs to be treated
+    # differently than a job that fails temporarily (example: a job that depends on
+    # an external API that is temporarily unavailable).
+    EXIT_CODE_SUCCESS= 0
+    EXIT_CODE_PERMANENT_FAIL = 1
+    EXIT_CODE_TEMPORARY_FAIL = 2
+
+    # keep track of the current job for logging purposes
     _current_job = None
-    _on_fail = 'bury'
-    _on_timeout = 'release'
+
+    # This specifies the behaviour when a command exits with anything else than
+    # an exit code of 0. Beanstalkd only offers default behaviour for _on_timeout
+    # and assumes failed jobs are buried by the connected worker. Default behaviour
+    # for each fail reason is to bury the job, but this an be changed in the config
+    # for either 'bury', 'delete', or 'release'
+    _fail_handlers = {
+        "on_permanent_fail" : None,
+        "on_temporary_fail" : None,
+        "on_unknown_fail" : None,
+        "on_timeout" : None
+    }
+
+    # the current state of this worker. Either STATE_WAITING or STATE_EXECUTING
     _state = None
+
+    # This is set to true on graceful stop.
     _exit_on_next_job = False
 
-    def __init__(self, pool, pid):
+    def __init__(self, pid, tube, command, connection, on_permanent_fail='bury',
+                                on_temporary_fail='bury', on_unknown_fail='bury',
+                                on_timeout='release'):
         """Constructor.
 
         :param tube: an dict containing information on the tube to watch
         :param pid:  the PID of the worker fork
         """
 
-        super(Worker, self).__init__(pool['tube'])
+        super(Worker, self).__init__(tube)
 
-        self.connect()
-        self.info("Start watching tube {0}", pool['tube'])
+        self.connect(connection)
+        self.info("Start watching tube {0}", tube)
 
-        self._pool = pool
         self._pid = pid
+        self._tube = tube
+        self._command = command
 
-        if 'on_fail' in pool and pool['on_fail'] in ['bury', 'release']:
-            self._on_fail = pool['on_fail']
-        if 'on_timeout' in pool and pool['on_timeout'] in ['bury', 'release']:
-            self._on_timeout = pool['on_timeout']
+        for handler in self._fail_handlers:
+            self._fail_handlers[handler] = locals()[handler]
 
-        # When the process is asked politely to stop, stop gracefully
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, self.stop)
 
-    def connect(self):
+    def connect(self, connection):
 
         try:
             self._beanstalk = beanstalkc.Connection(
-                host=config.get('connection', 'host'),
-                port=int(config.get('connection', 'port')))
+                host=connection['host'],
+                port=connection['port'])
         except beanstalkc.SocketError:
             self.error("Failed to connect. Retrying in 5 seconds")
             time.sleep(5)
@@ -95,7 +127,7 @@ class Worker(Logger, object):
     def watch(self):
         """Start watching a tube for incoming jobs"""
 
-        self._beanstalk.watch(self._pool["tube"])
+        self._beanstalk.watch(self._tube)
         self._beanstalk.ignore('default')
 
         while True:
@@ -114,7 +146,7 @@ class Worker(Logger, object):
                 time_left = job.stats()["time-left"]
 
                 if time_left > 0:
-                    command = Command(self._pool["command"], time_left, job.body)
+                    command = Command(self._command, time_left, job.body)
                     command.run()
 
                     self.info("job {0} done", job.stats()['id'])
@@ -126,11 +158,19 @@ class Worker(Logger, object):
             except FailedJob as e:
                 self.info("job {0} failed with return code {1} and message '{2}'",
                                     job.stats()['id'], e.returncode, e.message)
-                self._bury_or_release(job, self._on_fail)
+
+                if e.returncode == self.EXIT_CODE_PERMANENT_FAIL:
+                    handler = self._fail_handlers['on_permanent_fail']
+                elif e.returncode == self.EXIT_CODE_TEMPORARY_FAIL:
+                    handler = self._fail_handlers['on_tempory_fail']
+                else:
+                    handler = self._fail_handlers['on_unknown_fail']
+                getattr(job, handler)()
 
             except TimeOut:
                 self.info("job {0} timed out", job.stats()['id'])
-                self._bury_or_release(job, self._on_timeout)
+                handler = self._fail_handlers['on_timeout']
+                getattr(job, handler)()
 
     def _reserve_job(self):
         """Reserve a job from the tube and set appropriate worker state.
@@ -143,17 +183,6 @@ class Worker(Logger, object):
         except beanstalkc.SocketError:
             self.connect()
             return self._reserve_job()
-
-    def _bury_or_release(self, job, action):
-        """Bury or release a job
-
-        param job:    the job to bury or release
-        param action: the action to perform on the job
-        """
-        if action == 'release':
-            job.release(job.stats()['pri'], 60)
-        else:
-            job.bury()
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
@@ -246,7 +275,7 @@ class Forker(Logger, object):
     _pids = []
     _pools = []
 
-    def __init__(self):
+    def __init__(self, config):
         """Constructor
 
         param tubes: a list of tube configs, one per worker pool
@@ -260,14 +289,25 @@ class Forker(Logger, object):
 
         for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'tube:']:
 
-            pool = dict([(key, config.get(section, key)) for key in [
-                'workers',
-                'command',
-                'on_timeout',
-                'on_fail'
-            ] if config.has_option(section, key)])
+            pool = {
+                "worker_count" : config.get(section, "workers", 1),
+            }
 
-            pool.update({"tube" : tube})
+            kwargs = {
+                "tube" : tube,
+                "command" : config.get(section, "command"),
+                "on_permanent_fail" : config.get(section, "on_permanent_fail"),
+                "on_temporary_fail" : config.get(section, "on_temporary_fail"),
+                "on_unknown_fail" : config.get(section, "on_unknown_fail"),
+                "on_timeout" : config.get(section, "on_timeout"),
+                "connection" : {
+                    "host" : config.get('connection', 'host'),
+                    "port" : int(config.get('connection', 'port'))
+                }
+            }
+
+            pool['kwargs'] = {k:v for (k, v) in kwargs.iteritems() if v}
+
             self._pools.append(pool)
 
     def fork_all(self):
@@ -279,7 +319,7 @@ class Forker(Logger, object):
 
         for pool in self._pools:
 
-            for i in range(int(pool["workers"])):
+            for i in range(int(pool["worker_count"])):
 
                 # fork the current process. The parent and the child both continue
                 # from this point so we need to make sure that only the child
@@ -288,7 +328,7 @@ class Forker(Logger, object):
                 
                 if pid == 0:
                     # child process
-                    worker = Worker(pool, os.getpid())
+                    worker = Worker(os.getpid(), **pool['kwargs'])
                     worker.watch()
 
                     sys.exit()
@@ -299,7 +339,11 @@ class Forker(Logger, object):
             os.waitpid(pid, 0)
 
 def main():
-    Forker().fork_all()
+
+    config = Config()
+    config.read(os.environ['BEANDISPENDER_CONFIG_FILE'])
+
+    Forker(config).fork_all()
 
     # good manners
     print "\nbye"
