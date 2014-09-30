@@ -30,9 +30,16 @@ workers=5
 command=/path/to/command
 ```
 
-Two optional pool configuration options are available to specifiy what to do with failed jobs and jobs that take longer than the ttr of the job. There options are:
+
+###Job failure handling
+
+The config let's you (optionally) specify what you want to do with failed jobs. It makes the distinction between permanently failed jobs, and temporary failed jobs. Examples are, for the first, a job that needs to do something with a resource that no longer exists. The second would be for a job that uses an external API that is temporarily down. If the command that is executed can make this distinction, it can communicate this back by exiting with either an exit code of `1` for a permanent fail, or `2` for a temporary fail. `on_unknown_fail` is available for those cases where you run a script that is not yours and you don't control the exit code. In that case it would be useful to set all values to the same behaviour.
+
+**NOTE**: if `release` is selected, jobs will be released with a backoff delay of 60 seconds to give other jobs a chance.
 
 ```
-on_timeout=bury|release (default:release)
-on_fail=bury|release (default:bury)
+on_timeout=bury|release|delete (default:release)
+on_temporary_fail=bury|release|delete (default:bury)
+on_permanent_fail=bury|release|delete (default:bury)
+on_unknown_fail=bury|release|delete (default:bury)
 ```
