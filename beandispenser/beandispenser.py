@@ -192,7 +192,7 @@ class Worker(Logger, object):
                 if e.returncode == self.EXIT_CODE_PERMANENT_FAIL:
                     handler = self._fail_handlers['on_permanent_fail']
                 elif e.returncode == self.EXIT_CODE_TEMPORARY_FAIL:
-                    handler = self._fail_handlers['on_tempory_fail']
+                    handler = self._fail_handlers['on_temporary_fail']
                 else:
                     handler = self._fail_handlers['on_unknown_fail']
 
