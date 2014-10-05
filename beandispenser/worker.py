@@ -35,10 +35,14 @@ class Job(Logger, beanstalkc.Job):
         return self
 
     def __exit__(self, type, value, traceback):
-        if self._on_exit == 'release':
-            self.release(None, 60)
-        else:
-            getattr(self, self._on_exit)()
+        try:
+            if self._on_exit == 'release':
+                self.release(None, 60)
+            else:
+                getattr(self, self._on_exit)()
+        except beanstalkc.SocketError:
+            # next job reservation will reconnect.
+            pass
 
 
 class BeanstalkConnection(beanstalkc.Connection, Logger, object):
@@ -161,8 +165,11 @@ class Worker(Logger, object):
         """Start watching a tube for incoming jobs"""
         try:
             while True:
-                with self._connection.get_job() as job:
-                    job.execute_command(self._command, self._error_handler)
+                try:
+                    with self._connection.get_job() as job:
+                        job.execute_command(self._command, self._error_handler)
+                except beanstalkc.SocketError:
+                    self._connection.connect()
         except Graceful:
             self.close()
 
