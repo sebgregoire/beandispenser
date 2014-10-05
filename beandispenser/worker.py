@@ -5,28 +5,63 @@ from commanding import Command, TimeOut, FailedJob
 import sys
 import time
 
+class Graceful(Exception):
+    pass
 
-class QueueServerConnection(Logger, object):
+class Job(Logger, beanstalkc.Job):
+    
+    _on_exit = 'delete'
+
+    def execute_command(self, command, error_handler):
+        try:
+            stats = self.stats()
+
+            if stats["time-left"] > 0:
+                command = Command(command, stats["time-left"], self.body)
+                command.run()
+
+                self.info("job {0} done", stats['id'])
+            else:
+                error_handler.handle(TimeOut(), self)
+
+        except Exception as e:
+            error_handler.handle(e, self)
+
+    def on_exit(self, action):
+        self._on_exit = action
+
+    def __enter__(self):
+        self.info("job {0} accepted", self.stats()['id'])
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if self._on_exit == 'release':
+            self.release(None, 60)
+        else:
+            getattr(self, self._on_exit)()
+
+
+class BeanstalkConnection(beanstalkc.Connection, Logger, object):
 
     _continue = True;
 
     def __init__(self, host, port, tube):
-        self.host = host
-        self.port = port
         self.tube = tube
+        super(BeanstalkConnection, self).__init__(host, port)
+
+    def _interact_job(self, command, expected_ok, expected_err, reserved=True):
+        jid, size = self._interact(command, expected_ok, expected_err)
+        body = self._read_body(int(size))
+        return Job(self, int(jid), body, reserved)
 
     def stop(self):
         self._continue = False
 
-    def disconnect(self):
-        self._beanstalk.close()
-
     def connect(self):
         try:
-            self._beanstalk = beanstalkc.Connection(host=self.host, port=self.port)
-            self._beanstalk.ignore('default')
-            self._beanstalk.watch(self.tube)
-            self.info("connected")
+            super(BeanstalkConnection, self).connect()
+            self.ignore('default')
+            self.watch(self.tube)
         except beanstalkc.SocketError:
             if self._continue:
                 self.error("Failed to connect. Retrying in 5 seconds")
@@ -39,12 +74,13 @@ class QueueServerConnection(Logger, object):
 
         while self._continue:
             try:
-                job = self._beanstalk.reserve(2)
+                job = self.reserve(2)
                 if job:
                     return job
             except beanstalkc.SocketError:
                 self.error("lost connection")
                 self.connect()
+        raise Graceful;
 
 
 class ErrorHandler(Logger, object):
@@ -76,10 +112,8 @@ class ErrorHandler(Logger, object):
 
     def __init__(self, on_permanent_fail='bury', on_temporary_fail='bury',
                                 on_unknown_fail='bury', on_timeout='release'):
-
         for handler in self._fail_handlers:
             self._fail_handlers[handler] = locals()[handler]
-
 
     def handle(self, e, job):
 
@@ -88,20 +122,15 @@ class ErrorHandler(Logger, object):
         except FailedJob as e:
             self.info("job {0} failed with return code {1} and message '{2}'",
                                 job.stats()['id'], e.returncode, e.message)
-
             if e.returncode == self.EXIT_CODE_PERMANENT_FAIL:
-                handler = self._fail_handlers['on_permanent_fail']
+                job.on_exit(str(self._fail_handlers['on_permanent_fail']))
             elif e.returncode == self.EXIT_CODE_TEMPORARY_FAIL:
-                handler = self._fail_handlers['on_tempory_fail']
+                job.on_exit(str(self._fail_handlers['on_tempory_fail']))
             else:
-                handler = self._fail_handlers['on_unknown_fail']
-
-            getattr(job, str(handler))()
-
+                job.on_exit(str(self._fail_handlers['on_unknown_fail']))
         except TimeOut:
             self.info("job {0} timed out", job.stats()['id'])
-            handler = self._fail_handlers['on_timeout']
-            getattr(job, handler)()
+            job.on_exit(str(self._fail_handlers['on_timeout']))
 
 
 
@@ -109,13 +138,6 @@ class Worker(Logger, object):
     """A worker connects to the beanstalkc server and waits for jobs to
     become available.
     """
-
-    STATE_WAITING = 1
-    STATE_EXECUTING = 2
-
-    # This is set to true on graceful stop.
-    _exit_on_next_job = False
-
     def __init__(self, pid, tube, command, connection, on_permanent_fail='bury',
                                 on_temporary_fail='bury', on_unknown_fail='bury',
                                 on_timeout='release'):
@@ -129,7 +151,7 @@ class Worker(Logger, object):
             signal.signal(signum, self.stop)
 
         self._error_handler = ErrorHandler()
-        self._connection = QueueServerConnection(host=str(connection['host']),
+        self._connection = BeanstalkConnection(host=str(connection['host']),
                                                  port=connection['port'],
                                                  tube=tube)
         self._connection.connect()
@@ -138,44 +160,15 @@ class Worker(Logger, object):
 
     def watch(self):
         """Start watching a tube for incoming jobs"""
-
-        while self._exit_on_next_job == False:
-
-            self._state = self.STATE_WAITING
-            job = self._connection.get_job()
-            self._state = self.STATE_EXECUTING
-
-            if self._exit_on_next_job == True:
-                self.close()
-
-            self.info("job {0} accepted", job.stats()['id'])
-
-            try:
-                time_left = job.stats()["time-left"]
-
-                if time_left > 0:
-                    command = Command(self._command, time_left, job.body)
-                    command.run()
-
-                    self.info("job {0} done", job.stats()['id'])
-
-                    job.delete()
-                else:
-                    handler = self._fail_handlers['on_tempory_fail']
-                    getattr(job, str(handler))()
-
-            except beanstalkc.SocketError:
-                self.error("lost connection")
-                self._connction.connect()
-
-            except Exception as e:
-                self._error_handler.handle(e, job)            
-
-        self.close()
+        try:
+            while True:
+                with self._connection.get_job() as job:
+                    job.execute_command(self._command, self._error_handler)
+        except Graceful:
+            self.close()
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
-        self._exit_on_next_job = True
         self._connection.stop()
 
     def close(self):
