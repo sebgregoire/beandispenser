@@ -116,7 +116,6 @@ class ErrorHandler(Logger, object):
             self._fail_handlers[handler] = locals()[handler]
 
     def handle(self, e, job):
-
         try:
             raise e
         except FailedJob as e:
@@ -125,7 +124,7 @@ class ErrorHandler(Logger, object):
             if e.returncode == self.EXIT_CODE_PERMANENT_FAIL:
                 job.on_exit(str(self._fail_handlers['on_permanent_fail']))
             elif e.returncode == self.EXIT_CODE_TEMPORARY_FAIL:
-                job.on_exit(str(self._fail_handlers['on_tempory_fail']))
+                job.on_exit(str(self._fail_handlers['on_temporary_fail']))
             else:
                 job.on_exit(str(self._fail_handlers['on_unknown_fail']))
         except TimeOut:
