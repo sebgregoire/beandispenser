@@ -3,13 +3,23 @@ from config import Config
 from worker import Worker
 import os
 import signal
-    
+
+class ErrorActions(object):
+
+    def __init__(self, error_codes):
+        self.error_codes = error_codes
+
+    def get_action(self, exception, actions):
+
+        for error, action in actions.iteritems():
+            if error in self.error_codes and self.error_codes[error] == exception.returncode:
+                return action
+        return 'bury'
+
 class Forker(Logger, object):
     """The forker takes care of creating a fork for each worker.
     """
-
     _pids = []
-    _pools = []
 
     def __init__(self, config):
         """Constructor
@@ -17,32 +27,11 @@ class Forker(Logger, object):
         param tubes: a list of tube configs, one per worker pool
         """
 
+        self.config = config
+
         # Ignore the SIGINT, SIGTERM and SIGQUIT. Let the workers do the quiting.
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, signal.SIG_IGN)
-
-        for section, tube in [(s, s[5:]) for s in config.sections() if s[0:5] == 'tube:']:
-
-            pool = {
-                "worker_count" : config.get(section, "workers", 1),
-            }
-
-            kwargs = {
-                "tube" : tube,
-                "command" : config.get(section, "command"),
-                "on_permanent_fail" : config.get(section, "on_permanent_fail"),
-                "on_temporary_fail" : config.get(section, "on_temporary_fail"),
-                "on_unknown_fail" : config.get(section, "on_unknown_fail"),
-                "on_timeout" : config.get(section, "on_timeout"),
-                "connection" : {
-                    "host" : config.get('connection', 'host'),
-                    "port" : config.get('connection', 'port')
-                }
-            }
-
-            pool['kwargs'] = {k:v for (k, v) in kwargs.iteritems() if v}
-
-            self._pools.append(pool)
 
     def fork_all(self):
         """Create a fork for each worker. The number of workers per tube is
@@ -50,10 +39,14 @@ class Forker(Logger, object):
         """
 
         self.info("Start forking")
+        error_actions = ErrorActions(self.config['error_codes'])
 
-        for pool in self._pools:
+        for tube_config in self.config['tubes']:
 
-            for i in range(pool["worker_count"]):
+            try: worker_count = tube_config['workers']
+            except KeyError: worker_count = 1
+
+            for i in range(worker_count):
 
                 # fork the current process. The parent and the child both continue
                 # from this point so we need to make sure that only the child
@@ -62,7 +55,7 @@ class Forker(Logger, object):
                 
                 if pid == 0:
                     # child process
-                    worker = Worker(os.getpid(), **pool['kwargs'])
+                    worker = Worker(os.getpid(), tube_config, self.config['connection'], error_actions)
                     worker.watch()
 
                     sys.exit()
@@ -75,8 +68,7 @@ class Forker(Logger, object):
 def main():
 
     config = Config()
-    config.read(os.environ['BEANDISPENDER_CONFIG_FILE'])
-
+    config.read(open(os.environ['BEANDISPENDER_CONFIG_FILE']).read())
     Forker(config).fork_all()
 
     # good manners

@@ -1,4 +1,4 @@
-from ConfigParser import ConfigParser, NoOptionError
+import yaml
 
 class ConfigValueError(Exception):
     pass
@@ -29,12 +29,15 @@ class ConfigValue(object):
         return self._value
 
 
-class Config(ConfigParser):
+class Config(object):
+
     """Just a simple way of getting None back if the config doesn't exist
     """
-    def get(self, section, key, default=None):
+    def read(self, configs):
+        self.values = yaml.load(configs)
+
+    def __getitem__(self, attr):
         try:
-            value = ConfigParser.get(self, section, key)
-            return ConfigValue(section, key, value)
-        except NoOptionError:
+            return self.values[attr]
+        except KeyError:
             return None
