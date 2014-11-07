@@ -10,7 +10,7 @@ setup(
     include_package_data=True,
     install_requires=[ 'beanstalkc', 'PyYAML' ],
     data_files=[('/etc/init', ['init_script/beandispenser.conf']),
-                ('/etc/default', ['conf/beandispenser'])],
+                ('/etc', ['conf/beandispenser.yml'])],
     entry_points='''
         [console_scripts]
         beandispenser=beandispenser.beandispenser:main
