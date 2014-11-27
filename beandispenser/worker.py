@@ -8,7 +8,6 @@ import time
 class Graceful(Exception):
     pass
 
-
 class BeanstalkConnection(beanstalkc.Connection, Logger, object):
 
     _continue = True;
@@ -43,7 +42,7 @@ class BeanstalkConnection(beanstalkc.Connection, Logger, object):
             except beanstalkc.SocketError:
                 self.error("lost connection")
                 self.connect()
-        raise Graceful;
+        raise Graceful
 
 
 class Worker(Logger, object):
@@ -70,32 +69,29 @@ class Worker(Logger, object):
 
     def watch(self):
         """Start watching a tube for incoming jobs"""
-        try:
-            while True:
-                try:
-                    job = self._connection.get_job()
-                    stats = job.stats()
+        while True:
+            try:
+                job = self._connection.get_job()
+                stats = job.stats()
 
-                    if stats["time-left"] > 0:
-                        command = Command(self._command, stats["time-left"], job.body)
-                        command.run()
-                    else:
-                        error_handler.handle(TimeOut(), self)
-
-                except beanstalkc.SocketError:
-                    self._connection.connect()
-                except Exception as e:
-                    action = self.error_actions.get_action(e, self.error_handling)
-                    if action == 'release':
-                        job.release(delay=60)
-                    elif action in ['bury', 'delete']:
-                        getattr(job, action)()
-                    else:
-                        self.error('Invalid error handler specified for tube {} : {}. Burying instead.'.format(self.tube_name, action))
-                        job.bury()                        
-
-        except Graceful:
-            self.close()
+                if stats["time-left"] > 0:
+                    command = Command(self._command, stats["time-left"], job.body)
+                    command.run()
+                else:
+                    error_handler.handle(TimeOut(), self)
+            except Graceful:
+                self.close()
+            except beanstalkc.SocketError:
+                self._connection.connect()
+            except Exception as e:
+                action = self.error_actions.get_action(e, self.error_handling)
+                if action == 'release':
+                    job.release(delay=60)
+                elif action in ['bury', 'delete']:
+                    getattr(job, action)()
+                else:
+                    self.error('Invalid error handler specified for tube {} : {}. Burying instead.'.format(self.tube_name, action))
+                    job.bury()                        
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
