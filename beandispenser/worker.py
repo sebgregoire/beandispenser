@@ -24,11 +24,13 @@ class BeanstalkConnection(beanstalkc.Connection, Logger, object):
             super(BeanstalkConnection, self).connect()
             self.ignore('default')
             self.watch(self.tube)
+            self.info("Connected.")
         except beanstalkc.SocketError:
             if self._continue:
-                self.error("Failed to connect. Retrying in 5 seconds")
+                self.error("Failed to connect. Retrying in 5 seconds.")
                 time.sleep(5)
-                self.connect()
+                if self._continue:
+                    self.connect()
 
     def get_job(self):
         """Reserve a job from the tube and set appropriate worker state.
@@ -55,13 +57,14 @@ class Worker(Logger, object):
         :param tube: an dict containing information on the tube to watch
         :param pid:  the PID of the worker fork
         """
+
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, self.stop)
-
         self._connection = BeanstalkConnection(host=str(connection_config['host']),
                                                  port=connection_config['port'],
                                                  tube=tube_config['name'])
         self._connection.connect()
+
         self._command = tube_config['command']
         self.error_actions = error_actions
         self.error_handling = tube_config['error_handling']

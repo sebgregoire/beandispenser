@@ -13,5 +13,5 @@ tubes:
         workers: 1
         error_handling:
                 database_error: release
-                api_error: bury
+                api_error: release
                 permanent_fail: delete

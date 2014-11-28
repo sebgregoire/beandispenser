@@ -89,3 +89,6 @@ class Command(object):
             raise FailedJob(self.error, self.returncode)
 
         return self.output
+
+    def __str__(self):
+        return ' '.join(self.command)

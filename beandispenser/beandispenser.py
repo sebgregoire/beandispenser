@@ -37,8 +37,6 @@ class Forker(Logger, object):
         """Create a fork for each worker. The number of workers per tube is
         specified in the tubes list passed to the constructor.
         """
-
-        self.info("Start forking")
         error_actions = ErrorActions(self.config['error_codes'])
 
         for tube_config in self.config['tubes']:
@@ -55,11 +53,13 @@ class Forker(Logger, object):
                 
                 if pid == 0:
                     # child process
+                    self.info('Child process started with pid {} on tube "{}"'.format(os.getpid(), tube_config['name']))
                     worker = Worker(os.getpid(), tube_config, self.config['connection'], error_actions)
                     worker.watch()
 
                     sys.exit()
                 else:
+                    self.info('Parent process started with pid {}'.format(os.getpid()))
                     self._pids.append(pid)
 
         for pid in self._pids:
