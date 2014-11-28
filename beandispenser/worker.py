@@ -4,6 +4,8 @@ import beanstalkc
 from commanding import Command, TimeOut, FailedJob
 import sys
 import time
+import socket
+import yaml
 
 class Graceful(Exception):
     pass
@@ -13,8 +15,9 @@ class BeanstalkConnection(beanstalkc.Connection, Logger, object):
     _continue = True;
 
     def __init__(self, host, port, tube):
-        self.tube = tube
-        super(BeanstalkConnection, self).__init__(host, port)
+        self.tube, self.host, self.port = tube, host, port
+        self._connect_timeout = socket.getdefaulttimeout()
+        self._parse_yaml = yaml.load
 
     def stop(self):
         self._continue = False
@@ -27,8 +30,8 @@ class BeanstalkConnection(beanstalkc.Connection, Logger, object):
             self.info("Connected.")
         except beanstalkc.SocketError:
             if self._continue:
-                self.error("Failed to connect. Retrying in 5 seconds.")
-                time.sleep(5)
+                self.error("Failed to connect. Retrying in 2 seconds.")
+                time.sleep(2)
                 if self._continue:
                     self.connect()
 
@@ -58,13 +61,14 @@ class Worker(Logger, object):
         :param pid:  the PID of the worker fork
         """
 
-        for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
-            signal.signal(signum, self.stop)
         self._connection = BeanstalkConnection(host=str(connection_config['host']),
                                                  port=connection_config['port'],
                                                  tube=tube_config['name'])
-        self._connection.connect()
 
+        for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
+            signal.signal(signum, self.stop)
+
+        self._connection.connect()
         self._command = tube_config['command']
         self.error_actions = error_actions
         self.error_handling = tube_config['error_handling']
@@ -83,22 +87,23 @@ class Worker(Logger, object):
                 else:
                     error_handler.handle(TimeOut(), self)
             except Graceful:
-                self.close()
+                sys.exit()
             except beanstalkc.SocketError:
                 self._connection.connect()
-            except Exception as e:
-                action = self.error_actions.get_action(e, self.error_handling)
-                if action == 'release':
-                    job.release(delay=60)
-                elif action in ['bury', 'delete']:
-                    getattr(job, action)()
-                else:
-                    self.error('Invalid error handler specified for tube {} : {}. Burying instead.'.format(self.tube_name, action))
-                    job.bury()                        
+            except Exception as error:
+                self.handle_failed_command(error, job)
+
+    def handle_failed_command(self, error, job):
+        """Handle a failed command by performing the configured action on the job"""
+        action = self.error_actions.get_action(error, self.error_handling)
+        if action == 'release':
+            job.release(delay=60)
+        elif action in ['bury', 'delete']:
+            getattr(job, action)()
+        else:
+            self.error('Invalid error handler specified for tube {} : {}. Burying instead.'.format(self.tube_name, action))
+            job.bury()                        
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
         self._connection.stop()
-
-    def close(self):
-        sys.exit()
