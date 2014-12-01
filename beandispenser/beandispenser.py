@@ -67,8 +67,14 @@ class Forker(Logger, object):
 
 def main():
 
+    try:
+        config_path = os.environ['BEANDISPENDER_CONFIG_FILE']
+    except KeyError:
+        print 'You need to specify the BEANDISPENDER_CONFIG_FILE environment variable.'
+        exit(1)
+
     config = Config()
-    config.read(open(os.environ['BEANDISPENDER_CONFIG_FILE']).read())
+    config.read(open(config_path).read())
     Forker(config).fork_all()
 
     # good manners
