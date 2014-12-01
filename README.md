@@ -27,10 +27,10 @@ The `tubes` section defines which tubes you want to listen on, and what should b
 
 ```yaml
 tubes:
-      - name: tube_name
-        command: /path/to/command
-        workers: number_of_workers
-        error_handling: hash_of_error_names_and_job_actions
+      - name: tube_name (required)
+        command: /path/to/command (required)
+        workers: number_of_workers (optional. default: 1)
+        error_handling: hash_of_error_names_and_job_actions (optional. default: {})
 ```
 
 Example:
