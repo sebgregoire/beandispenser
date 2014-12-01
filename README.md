@@ -21,6 +21,11 @@ Beandispenser does not manage daemonizing. It's up to the user to choose their f
 
 The configuration file uses the YAML format. Two sections are required: `connection` and `tubes`.
 
+#### Error handling
+
+Your configuration may have an `error_codes` section. In this section you can map applicatin errors to their exit codes. If, for example, your application exits with code 2 when it encounters a database connection error, you can put `database_connection_error: 2` in this section. You can then later use `database_connection_error` as a key in the `error_handling` section of a tube definition. If, for example, you want to bury a job if a database connection error is encountered, you can put `database_connection_error: bury` in the `error_handling` section of the tube definition.
+
+
 ####Defining tubes
 
 The `tubes` section defines which tubes you want to listen on, and what should be done with jobs that become available. The format is as follows:
