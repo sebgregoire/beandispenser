@@ -1,9 +1,9 @@
 Bean Dispenser
 ==============
 
-###NOTE: still in development. Don't use in production.
+Bean Dispenser is a configurable python process to run UNIX executables for received jobs from beanstalkd tubes, passing the job body to the STDIN of the executable. In the configuration file you specify which tubes you want to listen to, how many workers you want to put on it, and what you want to do in case a jobs fails (exits with code > 0, or doesn't finish within TTR). The advantage of this is that you have all your worker configurations in one place and all your application logic is executed in short running processes.
 
-A configurable python process to run unix processes for received jobs from beanstalkd queues. The motivation behind this project is that I found myself needing a centralized place to manage my beanstalkd workers. Having tens of little workers, all doing their own "while true" loops became unmanagable very quickly. Also, if you're using PHP for your workers, you may not want to implement the long running process that watches the tubes in PHP ([here](http://software-gunslinger.tumblr.com/post/47131406821/php-is-meant-to-die)'s a fun read on why).
+Also, in case you're using PHP for your workers, you may not want to implement the long running process that watches the tubes in PHP ([here](http://software-gunslinger.tumblr.com/post/47131406821/php-is-meant-to-die)'s a fun read on why).
 
 
 ### Requirements
