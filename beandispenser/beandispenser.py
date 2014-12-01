@@ -1,6 +1,7 @@
 from logging import Logger
 from config import Config
 from worker import Worker
+from yaml.scanner import ScannerError
 import os
 import signal
 
@@ -74,8 +75,15 @@ def main():
         print 'You need to specify the BEANDISPENDER_CONFIG_FILE environment variable.'
         exit(1)
 
-    config = Config()
-    config.read(open(config_path).read())
+    try:
+        config = Config()
+        config.read(open(config_path).read())
+    except ScannerError as yaml_error:
+        print "\nYour config file has an error : '{}' :\n".format(yaml_error.problem)
+        print '---'
+        print yaml_error.problem_mark
+        exit(2)
+
     Forker(config).fork_all()
 
     # good manners
