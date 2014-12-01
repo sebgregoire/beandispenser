@@ -43,7 +43,7 @@ connection:
 error_codes:
         database_error: 1
         api_error: 2
-        user_doesnt_exit: 3
+        user_doesnt_exist: 3
 
 tubes:
       - name: foo
