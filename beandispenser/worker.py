@@ -118,4 +118,5 @@ class Worker(Logger, object):
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
+        self.info('Received signal {}. Stopping when ready.'.format(signum))
         self._connection.stop()
