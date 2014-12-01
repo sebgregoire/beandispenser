@@ -21,6 +21,20 @@ Beandispenser does not manage daemonizing. It's up to the user to choose their f
 
 The configuration file uses the YAML format. Two sections are required: `connection` and `tubes`.
 
+####Defining tubes
+
+The `tubes` section defines which tubes you want to listen on, and what should be done with jobs that become available. The format is as follows:
+
+```yaml
+tubes:
+      - name: tube_name
+        command: /path/to/command
+        workers: number_of_workers
+        error_handling: hash_of_error_names_and_job_actions
+```
+
+Example:
+
 ```yaml
 connection:
         host: localhost
