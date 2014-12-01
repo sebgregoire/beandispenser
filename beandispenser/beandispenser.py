@@ -39,6 +39,8 @@ class Forker(Logger, object):
         """
         error_actions = ErrorActions(self.config['error_codes'])
 
+        self.info('Parent process started with pid {}'.format(os.getpid()))
+
         for tube_config in self.config['tubes']:
 
             try: worker_count = tube_config['workers']
@@ -59,7 +61,6 @@ class Forker(Logger, object):
 
                     sys.exit()
                 else:
-                    self.info('Parent process started with pid {}'.format(os.getpid()))
                     self._pids.append(pid)
 
         for pid in self._pids:
