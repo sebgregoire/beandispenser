@@ -71,7 +71,7 @@ class Worker(Logger, object):
         self._connection.connect()
         self._command = tube_config['command']
         self.error_actions = error_actions
-        self.error_handling = tube_config['error_handling']
+        self.error_handling = tube_config['error_handling'] if 'error_handling' in tube_config else {}
         self.tube_name = tube_config['name']
 
     def watch(self):
