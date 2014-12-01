@@ -85,24 +85,36 @@ class Worker(Logger, object):
                     command = Command(self._command, stats["time-left"], job.body)
                     command.run()
                 else:
-                    error_handler.handle(TimeOut(), self)
+                    raise TimeOut()
             except Graceful:
                 sys.exit()
             except beanstalkc.SocketError:
                 self._connection.connect()
-            except Exception as error:
+            except FailedJob as error:
                 self.handle_failed_command(error, job)
+            except TimeOut:
+                self.handle_timeout(job)
 
     def handle_failed_command(self, error, job):
         """Handle a failed command by performing the configured action on the job"""
         action = self.error_actions.get_action(error, self.error_handling)
-        if action == 'release':
-            job.release(delay=60)
-        elif action in ['bury', 'delete']:
-            getattr(job, action)()
+        if action in ['bury', 'delete', 'release']:
+            if action == 'release' : job.release(delay=60)
+            else: getattr(job, action)()
         else:
             self.error('Invalid error handler specified for tube {} : {}. Burying instead.'.format(self.tube_name, action))
-            job.bury()                        
+            job.bury()
+
+    def handle_timeout(self, job):
+        """Handle the case where a job took longer that its allowed ttr"""
+        try:
+            if self.error_handling['timeout'] in ['delete', 'release', 'bury']:
+                if self.error_handling['timeout'] == 'release' : job.release(delay=60)
+                else: getattr(job, self.error_handling['timeout'])()
+            else:
+                job.bury()
+        except KeyError:
+            job.bury()
 
     def stop(self, signum, frame):
         """Perform a graceful stop"""
