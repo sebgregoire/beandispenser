@@ -12,34 +12,24 @@ Bean Dispenser can be installed using pip. To install, clone the repo, cd into i
 
 ###Configuration:
 
-The configuaration file has one `[connection]` section and multiple `[pool:poolname]` sections. The connection section specifies the connection to your beanstalkd server. Each pool section specifies which tube to watch, how many worker processes to allow at the same time and what to do with the received jobs.
+example:
 
-An example:
+```yaml
+connection:
+        host: localhost
+        port: 11300
 
-```
-[connection]
-host=localhost
-port=11300
+error_codes:
+        database_error: 1
+        api_error: 2
+        user_doesnt_exit: 3
 
-[tube:foo]
-workers=3
-command=/path/to/command
-
-[tube:bar]
-workers=5
-command=/path/to/command
-```
-
-
-###Job failure handling
-
-The config let's you (optionally) specify what you want to do with failed jobs. It makes the distinction between permanently failed jobs, and temporary failed jobs. Examples are, for the first, a job that needs to do something with a resource that no longer exists. The second would be for a job that uses an external API that is temporarily down. If the command that is executed can make this distinction, it can communicate this back by exiting with either an exit code of `1` for a permanent fail, or `2` for a temporary fail. `on_unknown_fail` is available for those cases where you run a script that is not yours and you don't control the exit code. In that case it would be useful to set all values to the same behaviour.
-
-**NOTE**: if `release` is selected, jobs will be released with a backoff delay of 60 seconds to give other jobs a chance.
-
-```
-on_timeout=bury|release|delete (default:release)
-on_temporary_fail=bury|release|delete (default:bury)
-on_permanent_fail=bury|release|delete (default:bury)
-on_unknown_fail=bury|release|delete (default:bury)
+tubes:
+      - name: foo
+        command: /path/to/command
+        workers: 5
+        error_handling:
+                database_error: release
+                api_error: release
+                user_doesnt_exit: delete
 ```
