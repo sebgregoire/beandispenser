@@ -20,25 +20,33 @@ class ErrorActions(object):
 class Forker(Logger, object):
     """The forker takes care of creating a fork for each worker.
     """
-    _pids = []
 
-    def __init__(self, config):
+    def __init__(self, config_path):
         """Constructor
 
         param tubes: a list of tube configs, one per worker pool
         """
-
-        self.config = config
-
+        self.read_config(config_path)
         # Ignore the SIGINT, SIGTERM and SIGQUIT. Let the workers do the quiting.
         for signum in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signum, signal.SIG_IGN)
+
+    def read_config(self, path):
+        try:
+            self.config = Config()
+            self.config.read(open(path).read())
+        except ScannerError as yaml_error:
+            print "\nYour config file has an error : '{}' :\n".format(yaml_error.problem)
+            print '---'
+            print yaml_error.problem_mark
+            exit(2)
 
     def fork_all(self):
         """Create a fork for each worker. The number of workers per tube is
         specified in the tubes list passed to the constructor.
         """
         error_actions = ErrorActions(self.config['error_codes'])
+        pids = []
 
         self.info('Parent process started with pid {}'.format(os.getpid()))
 
@@ -62,10 +70,11 @@ class Forker(Logger, object):
 
                     sys.exit()
                 else:
-                    self._pids.append(pid)
+                    pids.append(pid)
 
-        for pid in self._pids:
+        for pid in pids:
             os.waitpid(pid, 0)
+            self.info("Worker {} has exited.".format(pid))
 
 def main():
 
@@ -75,16 +84,7 @@ def main():
         print 'You need to specify the BEANDISPENDER_CONFIG_FILE environment variable.'
         exit(1)
 
-    try:
-        config = Config()
-        config.read(open(config_path).read())
-    except ScannerError as yaml_error:
-        print "\nYour config file has an error : '{}' :\n".format(yaml_error.problem)
-        print '---'
-        print yaml_error.problem_mark
-        exit(2)
-
-    Forker(config).fork_all()
+    Forker(config_path).fork_all()
 
     # good manners
     print "\nbye"
